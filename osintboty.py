@@ -3,10 +3,27 @@
 
 import requests, time, json, re, socket, subprocess, sys, hashlib
 import phonenumbers, dns.resolver, whois
+import os, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from phonenumbers import carrier, geocoder, timezone as pn_timezone
+# ========== خادم صحي لـ Render ==========
+PORT = int(os.environ.get("PORT", 8080))
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        pass
+
+def run_health_server():
+    HTTPServer(("0.0.0.0", PORT), HealthHandler).serve_forever()
+
+threading.Thread(target=run_health_server, daemon=True).start()
 
 # ========== التكوينات الأساسية ==========
 TOKEN = "8749267871:AAFiuPD1eY3TxeQjQt5kYW2a8PhTO1RPArQ"
