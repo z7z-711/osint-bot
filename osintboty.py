@@ -624,7 +624,7 @@ def process_callback(callback):
             edit_message(chat_id, msg_id, "✅ تم التحقق!")
             show_main_menu(chat_id, user_id)
         else:
-            edit_message(chat_id, msg_id, "❌ لم تشترك بعد.")
+            edit_message(chat_id, msg_id, "        /start  اشترك ثم اضغط                                 https://t.me/mklz7z                    ❌ لم تشترك بعد.")
         answer_callback(cb_id)
         return
 
