@@ -26,7 +26,7 @@ def run_health_server():
 threading.Thread(target=run_health_server, daemon=True).start()
 
 # ========== التكوينات الأساسية ==========
-TOKEN = "8749267871:AAFiuPD1eY3TxeQjQt5kYW2a8PhTO1RPArQ"
+TOKEN = "8749267871:AAGhgXTCzg3TEEszmMpHulDpOXi7pW5n-s0"
 REQUIRED_CHANNEL = "@mklz7z"
 OWNER_ID = 6888107255
 WHITELIST_USERS = [OWNER_ID]
