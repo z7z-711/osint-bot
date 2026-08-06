@@ -582,7 +582,7 @@ def get_submenu(menu_name):
 def show_main_menu(chat_id, user_id, try_msg_id=None):
     text = """       🔱 **OSINT BOT** 🔱
 
-👨‍💻 **المطور:** [@vsu_7]
+👨‍💻 **المطور:** [@vvz_1]
 **القناة الرسمية:** [https://t.me/mklz7z]
 ━━━━━━━━━━━━━━━━━━━
  **هذا البوت يوفر أدوات OSINT :**
