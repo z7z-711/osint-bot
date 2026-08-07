@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from phonenumbers import carrier, geocoder, timezone as pn_timezone
+
 # ========== خادم صحي لـ Render ==========
 PORT = int(os.environ.get("PORT", 8080))
 
@@ -33,14 +34,17 @@ WHITELIST_USERS = [OWNER_ID]
 LOG_GROUP_ID = -1003890891288
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 
-user_states = {}          # حالة المستخدم (أي أداة ينتظرها)
-user_last_bot_msg = {}    # آخر message_id للبوت (لتعديله)
-user_last_user_msg = {}   # آخر message_id للمستخدم (لحذفه)
+user_states = {}
+user_last_bot_msg = {}
+user_last_user_msg = {}
 
 CACHE_TTL = 300
 cache = {}
 
 COMMON_PORTS = [21,22,23,25,53,80,110,443,993,995,3306,3389,8080]
+
+# ========== متغيرات التحكم بالأنيميشن ==========
+animation_stop_flags = {}
 
 # ========== دوال مساعدة ==========
 def get_session():
@@ -53,7 +57,7 @@ def send_message(chat_id, text, reply_markup=None, disable_preview=False):
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
     try:
-        return requests.post(f"{API_URL}/sendMessage", json=data, timeout=7).json()
+        return requests.post(f"{API_URL}/sendMessage", json=data, timeout=10).json()
     except:
         return None
 
@@ -64,7 +68,7 @@ def edit_message(chat_id, msg_id, text, reply_markup=None, disable_preview=False
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
     try:
-        return requests.post(f"{API_URL}/editMessageText", json=data, timeout=7).json()
+        return requests.post(f"{API_URL}/editMessageText", json=data, timeout=10).json()
     except:
         return None
 
@@ -107,7 +111,7 @@ def result_buttons(tool_callback):
         [{"text": "🏠 القائمة الرئيسية", "callback_data": "back_main"}]
     ]}
 
-# ========== نصوص المساعدة العميقة ==========
+# ========== نصوص المساعدة ==========
 HELP_TEXTS = {
     "net_ip": """🔍 **ما هي IP Intelligence؟**
 تقوم بإدخال عنوان IP (مثل 8.8.8.8) ويقوم البوت بجلب:
@@ -202,10 +206,30 @@ HELP_TEXTS = {
 📌 **الفائدة:** اختبار أمان الموقع ومعرفة نقاط الدخول للإدارة.
 💡 **مثال:** `example.com` → قد يكتشف `/admin` أو `/login` إذا كانت موجودة.""",
 
+    "web_methods": """🔧 **ما هي HTTP Methods Test؟**
+اختبار الطرق HTTP المسموحة على الخادم (GET, POST, PUT, DELETE, OPTIONS, HEAD, TRACE, PATCH).
+📌 **الفائدة:** اكتشاف الثغرات الأمنية مثل TRACE أو PUT المفتوح.
+💡 **مثال:** `example.com` → يعرض الطرق المسموحة والممنوعة.""",
+
     "email_lookup": """✉️ **ما هي Email Lookup؟**
 تحليل البريد الإلكتروني: سجلات MX، SPF، Gravatar، وصحة الصيغة.
 📌 **الفائدة:** التأكد من إعدادات البريد وصورة Gravatar المرتبطة.
 💡 **مثال:** `admin@example.com` → يعرض خوادم البريد ووجود SPF.""",
+
+    "report_domain": """📊 **ما هي Quick Domain Report؟**
+تقرير شامل عن النطاق يشمل: IP, WHOIS, DNS, التقنيات, robots.txt.
+📌 **الفائدة:** الحصول على نظرة كاملة عن الموقع في تقرير واحد.
+💡 **مثال:** `github.com` → يعرض 6 أدوات مجتمعة.""",
+
+    "report_ip": """📊 **ما هي Quick IP Report؟**
+تقرير شامل عن الـ IP يشمل: الموقع الجغرافي، Reverse DNS، Reverse IP، والمنافذ المفتوحة.
+📌 **الفائدة:** تحليل شامل للخادم من عنوان IP واحد.
+💡 **مثال:** `8.8.8.8` → يعرض 4 أدوات مجتمعة.""",
+
+    "report_social": """📊 **ما هي Social Media Report؟**
+تقرير شامل عن اسم المستخدم في منصات التواصل الاجتماعي + GitHub.
+📌 **الفائدة:** معرفة وجود الشخص على جميع المنصات دفعة واحدة.
+💡 **مثال:** `github` → يعرض نتائج Username Search و GitHub معاً."""
 }
 
 def show_help(chat_id, tool_id, msg_id):
@@ -499,6 +523,21 @@ def admin_finder(url):
             continue
     return f"🔐 **صفحات الإدارة المحتملة:**\n" + ("\n".join(found) if found else "❌ لا توجد.")
 
+def http_methods(url):
+    url = fix_url(url)
+    methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE', 'PATCH']
+    allowed = []
+    for method in methods:
+        try:
+            r = requests.request(method, url, timeout=5, allow_redirects=False)
+            if r.status_code not in [405, 501, 403]:
+                allowed.append(f"✅ {method} → {r.status_code}")
+            else:
+                allowed.append(f"❌ {method} → {r.status_code}")
+        except:
+            allowed.append(f"⚠️ {method} → Timeout/Error")
+    return "🔧 **HTTP Methods Test**\n" + "\n".join(allowed)
+
 def email_lookup(email):
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return "❌ صيغة البريد غير صالحة."
@@ -527,7 +566,88 @@ def email_lookup(email):
         result += "🖼️ Gravatar: فشل الاتصال\n"
     return result
 
-# ========== بناء القوائم (بدون Privacy) ==========
+# ========== الأدوات الجديدة (Reports) ==========
+
+def quick_report_domain(domain):
+    results = []
+    results.append(f"📊 **QUICK REPORT FOR `{domain}`**\n" + "="*40)
+    results.append(domain_to_ip(domain))
+    try:
+        ip = socket.gethostbyname(domain)
+        results.append(ip_intelligence(ip))
+    except:
+        results.append("❌ Cannot resolve IP")
+    results.append(dns_lookup(domain))
+    results.append(whois_lookup(domain))
+    results.append(web_technology(domain))
+    results.append(robots_txt(domain))
+    return "\n\n".join(results)
+
+def quick_report_ip(ip):
+    results = []
+    results.append(f"📊 **QUICK REPORT FOR IP `{ip}`**\n" + "="*40)
+    results.append(ip_intelligence(ip))
+    results.append(reverse_dns(ip))
+    results.append(reverse_ip(ip))
+    results.append(port_scanner_basic(ip))
+    return "\n\n".join(results)
+
+def social_report(username):
+    results = []
+    results.append(f"📊 **SOCIAL MEDIA REPORT FOR `{username}`**\n" + "="*40)
+    results.append(username_search_parallel(username))
+    gh = github_user_info(username)
+    if "❌" not in gh:
+        results.append("\n" + gh)
+    return "\n\n".join(results)
+
+# ========== أنيميشن للفحوصات الطويلة ==========
+
+def show_loading_if_slow(chat_id, msg_id, tool_name, start_time, user_id):
+    """
+    تظهر رسالة انتظار فقط إذا مرت 3 ثواني وما زال الفحص يعمل
+    مع إمكانية إيقافها عند ظهور النتيجة
+    """
+    def check_and_show():
+        # ننتظر 3 ثواني
+        time.sleep(3)
+        
+        # نتحقق إذا تم إيقاف الأنيميشن
+        if animation_stop_flags.get(user_id, False):
+            return
+        
+        elapsed = time.time() - start_time
+        if elapsed >= 3:
+            try:
+                dots = ["", "•", "••", "•••", "••••"]
+                i = 0
+                while time.time() - start_time < 30:
+                    # نتحقق كل دورة إذا تم الإيقاف
+                    if animation_stop_flags.get(user_id, False):
+                        return
+                    
+                    dot = dots[i % len(dots)]
+                    text = f"""⏳ **جاري التنفيذ** {dot}
+
+📌 **الأداة:** `{tool_name}`
+⏱️ **مضى:** {int(time.time() - start_time)} ثانية
+━━━━━━━━━━━━━━━━━━━
+🔄 يرجى الانتظار..."""
+                    try:
+                        edit_message(chat_id, msg_id, text, disable_preview=True)
+                        time.sleep(0.5)
+                        i += 1
+                    except:
+                        break
+            except:
+                pass
+    
+    thread = threading.Thread(target=check_and_show, daemon=True)
+    thread.start()
+    return thread
+
+# ========== بناء القوائم ==========
+
 def main_menu_keyboard():
     return {"inline_keyboard": [
         [{"text": "🌐 Network", "callback_data": "menu_network"}],
@@ -535,7 +655,8 @@ def main_menu_keyboard():
         [{"text": "👤 Account", "callback_data": "menu_account"}],
         [{"text": "📞 Phone", "callback_data": "menu_phone"}],
         [{"text": "🌍 Web", "callback_data": "menu_web"}],
-        [{"text": "✉️ Email", "callback_data": "menu_email"}]
+        [{"text": "✉️ Email", "callback_data": "menu_email"}],
+        [{"text": "📊 OSINT Report", "callback_data": "menu_report"}]
     ]}
 
 def get_submenu(menu_name):
@@ -549,6 +670,7 @@ def get_submenu(menu_name):
         ],
         "domain": [
             [{"text": "🔍 DNS Lookup", "callback_data": "dom_dns"}],
+            [{"text": "🌐 Subdomain Finder", "callback_data": "dom_subdomain"}],
             [{"text": "🏢 WHOIS", "callback_data": "dom_whois"}],
             [{"text": "🔄 Domain → IP", "callback_data": "dom_to_ip"}],
             [{"text": "🔄 Reverse IP", "callback_data": "dom_reverse_ip"}],
@@ -565,7 +687,8 @@ def get_submenu(menu_name):
         ],
         "web": [
             [{"text": "💻 Web Technology", "callback_data": "web_tech"}],
-            [{"text": "🌐 Website Info", "callback_data": "web_info"}],
+            [{"text": "🌐 Website Info (Headers)", "callback_data": "web_info"}],
+            [{"text": "🔧 HTTP Methods", "callback_data": "web_methods"}],
             [{"text": "🕷️ Crawler", "callback_data": "web_crawler"}],
             [{"text": "🤖 robots.txt", "callback_data": "web_robots"}],
             [{"text": "🗺️ sitemap.xml", "callback_data": "web_sitemap"}],
@@ -574,6 +697,12 @@ def get_submenu(menu_name):
         ],
         "email": [
             [{"text": "✉️ Email Lookup", "callback_data": "email_lookup"}],
+            [{"text": "🔙 الرجوع", "callback_data": "back_main"}]
+        ],
+        "report": [
+            [{"text": "📊 Quick Domain Report", "callback_data": "report_domain"}],
+            [{"text": "📊 Quick IP Report", "callback_data": "report_ip"}],
+            [{"text": "📊 Social Media Report", "callback_data": "report_social"}],
             [{"text": "🔙 الرجوع", "callback_data": "back_main"}]
         ]
     }
@@ -593,7 +722,7 @@ def show_main_menu(chat_id, user_id, try_msg_id=None):
 • 📞 تحليل أرقام الهاتف  
 • 💻 فحص المواقع والتقنيات  
 • ✉️ تحليل البريد الإلكتروني  
-ملاحظة: جميع المعلومات من مصادر مفتوحة
+• 📊 تقارير شاملة (All-in-One)
 ━━━━━━━━━━━━━━━━━━━
  **القائمة الرئيسية : **"""
     if try_msg_id:
@@ -610,7 +739,36 @@ def show_submenu(chat_id, msg_id, menu_name, user_id):
     edit_message(chat_id, msg_id, f"📂 **قائمة {menu_name.capitalize()}**", sub_kb)
     user_last_bot_msg[user_id] = msg_id
 
+def get_prompt_for_tool(tool_id):
+    prompts = {
+        "net_ip": "🌐 **أرسل عنوان IP**\nمثال: `8.8.8.8`",
+        "net_port_basic": "🔌 **أرسل عنوان IP لفحص المنافذ**\nمثال: `scanme.nmap.org`",
+        "net_reverse_dns": "🔄 **أرسل عنوان IP لـ Reverse DNS**\nمثال: `8.8.8.8`",
+        "net_ping": "🏓 **أرسل اسم المضيف أو IP**\nمثال: `google.com`",
+        "dom_dns": "🔍 **أرسل النطاق لاستعلام DNS**\nمثال: `example.com`",
+        "dom_subdomain": "🌐 **أرسل النطاق للبحث عن subdomains**\nمثال: `google.com`",
+        "dom_whois": "🏢 **أرسل النطاق لاستعلام WHOIS**\nمثال: `github.com`",
+        "dom_to_ip": "🔄 **أرسل النطاق لتحويله إلى IP**\nمثال: `github.com`",
+        "dom_reverse_ip": "🔄 **أرسل عنوان IP لـ Reverse IP**\nمثال: `8.8.8.8`",
+        "acc_username": "🔍 **أرسل اسم المستخدم للبحث**\nمثال: `github`",
+        "acc_github": "🐙 **أرسل اسم مستخدم GitHub**\nمثال: `octocat`",
+        "phone_lookup": "📞 **أرسل رقم الهاتف مع مفتاح الدولة**\nمثال: `+966512345678`",
+        "web_tech": "💻 **أرسل رابط الموقع**\nمثال: `example.com`",
+        "web_info": "🌐 **أرسل رابط الموقع**\nمثال: `example.com`",
+        "web_crawler": "🕷️ **أرسل رابط الموقع**\nمثال: `example.com`",
+        "web_robots": "🤖 **أرسل رابط الموقع**\nمثال: `google.com`",
+        "web_sitemap": "🗺️ **أرسل رابط الموقع**\nمثال: `example.com`",
+        "web_admin": "🔐 **أرسل رابط الموقع**\nمثال: `example.com`",
+        "web_methods": "🔧 **أرسل رابط الموقع**\nمثال: `example.com`",
+        "email_lookup": "✉️ **أرسل البريد الإلكتروني**\nمثال: `admin@example.com`",
+        "report_domain": "📊 **أرسل النطاق لتقرير شامل**\nمثال: `github.com`",
+        "report_ip": "📊 **أرسل عنوان IP لتقرير شامل**\nمثال: `8.8.8.8`",
+        "report_social": "📊 **أرسل اسم المستخدم**\nمثال: `github`"
+    }
+    return prompts.get(tool_id, "✏️ أرسل القيمة المطلوبة:")
+
 # ========== معالجة الكولباك والرسائل ==========
+
 def process_callback(callback):
     data = callback["data"]
     chat_id = callback["message"]["chat"]["id"]
@@ -624,7 +782,7 @@ def process_callback(callback):
             edit_message(chat_id, msg_id, "✅ تم التحقق!")
             show_main_menu(chat_id, user_id)
         else:
-            edit_message(chat_id, msg_id, "        /start  اشترك ثم اضغط                                 https://t.me/mklz7z                    ❌ لم تشترك بعد.")
+            edit_message(chat_id, msg_id, "❌ لم تشترك بعد. اشترك ثم اضغط /start")
         answer_callback(cb_id)
         return
 
@@ -640,7 +798,6 @@ def process_callback(callback):
         answer_callback(cb_id)
         return
 
-    # المساعدة
     if data.startswith("help_"):
         tool_id = data[5:]
         show_help(chat_id, tool_id, msg_id)
@@ -649,7 +806,6 @@ def process_callback(callback):
 
     if data.startswith("back_to_"):
         tool_id = data[8:]
-        # نعيد طلب الإدخال بنفس الرسالة
         prompt = get_prompt_for_tool(tool_id)
         edit_message(chat_id, msg_id, prompt, result_buttons(tool_id))
         user_states[user_id] = tool_id
@@ -669,42 +825,21 @@ def process_callback(callback):
         show_submenu(chat_id, msg_id, "web", user_id)
     elif data == "menu_email":
         show_submenu(chat_id, msg_id, "email", user_id)
+    elif data == "menu_report":
+        show_submenu(chat_id, msg_id, "report", user_id)
 
-    # أدوات (طلب إدخال) - نعرض رسالة واضحة مع مثال
+    # أدوات
     elif data in ["net_ip", "net_port_basic", "net_reverse_dns", "net_ping",
                   "dom_dns", "dom_subdomain", "dom_whois", "dom_to_ip", "dom_reverse_ip",
                   "acc_username", "acc_github", "phone_lookup",
                   "web_tech", "web_info", "web_crawler", "web_robots", "web_sitemap", "web_admin",
-                  "email_lookup"]:
+                  "web_methods", "email_lookup",
+                  "report_domain", "report_ip", "report_social"]:
         prompt = get_prompt_for_tool(data)
         edit_message(chat_id, msg_id, prompt, result_buttons(data))
         user_states[user_id] = data
 
     answer_callback(cb_id)
-
-def get_prompt_for_tool(tool_id):
-    prompts = {
-        "net_ip": "🌐 **أرسل عنوان IP**\nمثال: `8.8.8.8`",
-        "net_port_basic": "🔌 **أرسل عنوان IP لفحص المنافذ الشائعة**\nمثال: `scanme.nmap.org`",
-        "net_reverse_dns": "🔄 **أرسل عنوان IP لـ Reverse DNS**\nمثال: `8.8.8.8`",
-        "net_ping": "🏓 **أرسل اسم المضيف أو IP لاختبار ping**\nمثال: `google.com`",
-        "dom_dns": "🔍 **أرسل النطاق (domain) لاستعلام DNS**\nمثال: `example.com`",
-        "dom_subdomain": "🌐 **أرسل النطاق الرئيسي للبحث عن subdomains**\nمثال: `google.com`",
-        "dom_whois": "🏢 **أرسل النطاق لاستعلام WHOIS**\nمثال: `github.com`",
-        "dom_to_ip": "🔄 **أرسل النطاق لتحويله إلى IP**\nمثال: `github.com`",
-        "dom_reverse_ip": "🔄 **أرسل عنوان IP لـ Reverse IP**\nمثال: `8.8.8.8`",
-        "acc_username": "🔍 **أرسل اسم المستخدم للبحث في 30+ منصة**\nمثال: `github`",
-        "acc_github": "🐙 **أرسل اسم مستخدم GitHub**\nمثال: `octocat`",
-        "phone_lookup": "📞 **أرسل رقم الهاتف مع مفتاح الدولة**\nمثال: `+966512345678`",
-        "web_tech": "💻 **أرسل رابط الموقع (مع http:// أو بدونه)**\nمثال: `example.com`",
-        "web_info": "🌐 **أرسل رابط الموقع للحصول على معلومات الرأس**\nمثال: `example.com`",
-        "web_crawler": "🕷️ **أرسل رابط الموقع لاستخراج الروابط**\nمثال: `example.com`",
-        "web_robots": "🤖 **أرسل رابط الموقع لجلب robots.txt**\nمثال: `google.com`",
-        "web_sitemap": "🗺️ **أرسل رابط الموقع لجلب sitemap.xml**\nمثال: `example.com`",
-        "web_admin": "🔐 **أرسل رابط الموقع للبحث عن صفحات الإدارة**\nمثال: `example.com`",
-        "email_lookup": "✉️ **أرسل البريد الإلكتروني لتحليله**\nمثال: `admin@example.com`"
-    }
-    return prompts.get(tool_id, "✏️ أرسل القيمة المطلوبة:")
 
 def process_message(message):
     chat_id = message["chat"]["id"]
@@ -713,7 +848,6 @@ def process_message(message):
     username = message["from"].get("username", "")
     user_msg_id = message["message_id"]
 
-    # حذف رسالة المستخدم فوراً لتبقى رسالة البوت فقط
     delete_message(chat_id, user_msg_id)
 
     if not is_member(user_id):
@@ -724,7 +858,6 @@ def process_message(message):
 
     state = user_states.pop(user_id, None)
     if not state:
-        # لا توجد حالة: نعرض القائمة الرئيسية ونعدل آخر رسالة للبوت إن وجدت
         last_bot = user_last_bot_msg.get(user_id)
         if last_bot:
             show_main_menu(chat_id, user_id, last_bot)
@@ -732,7 +865,47 @@ def process_message(message):
             show_main_menu(chat_id, user_id)
         return
 
-    # تنفيذ الأداة
+    last_bot = user_last_bot_msg.get(user_id)
+    
+    # أسماء الأدوات
+    tool_names = {
+        "net_ip": "IP Intelligence",
+        "net_port_basic": "Port Scanner",
+        "net_reverse_dns": "Reverse DNS",
+        "net_ping": "Ping Test",
+        "dom_dns": "DNS Lookup",
+        "dom_subdomain": "Subdomain Finder",
+        "dom_whois": "WHOIS Lookup",
+        "dom_to_ip": "Domain to IP",
+        "dom_reverse_ip": "Reverse IP",
+        "acc_username": "Username Search",
+        "acc_github": "GitHub Info",
+        "phone_lookup": "Phone Lookup",
+        "web_tech": "Web Technology",
+        "web_info": "Website Info",
+        "web_crawler": "Crawler",
+        "web_robots": "robots.txt",
+        "web_sitemap": "sitemap.xml",
+        "web_admin": "Admin Finder",
+        "web_methods": "HTTP Methods",
+        "email_lookup": "Email Lookup",
+        "report_domain": "Domain Report",
+        "report_ip": "IP Report",
+        "report_social": "Social Report"
+    }
+    tool_name = tool_names.get(state, state)
+    
+    # ====== بدء التوقيت ======
+    start_time = time.time()
+    
+    # ====== إزالة أي علم سابق ======
+    animation_stop_flags[user_id] = False
+    
+    # ====== تشغيل الأنيميشن الشرطي ======
+    if last_bot:
+        show_loading_if_slow(chat_id, last_bot, tool_name, start_time, user_id)
+    
+    # ====== تنفيذ الفحص ======
     result = None
     try:
         if state == "net_ip":
@@ -771,21 +944,35 @@ def process_message(message):
             result = sitemap_xml(text)
         elif state == "web_admin":
             result = admin_finder(text)
+        elif state == "web_methods":
+            result = http_methods(text)
         elif state == "email_lookup":
             result = email_lookup(text)
+        elif state == "report_domain":
+            result = quick_report_domain(text)
+        elif state == "report_ip":
+            result = quick_report_ip(text)
+        elif state == "report_social":
+            result = social_report(text)
         else:
             result = "⚠️ أداة غير معروفة."
 
+        # ====== إيقاف الأنيميشن فوراً ======
+        animation_stop_flags[user_id] = True
+
+        # ====== عرض النتيجة ======
         if result:
-            # تعديل آخر رسالة للبوت (التي كانت تطلب الإدخال) لعرض النتيجة
             last_bot = user_last_bot_msg.get(user_id)
             if last_bot:
                 edit_message(chat_id, last_bot, result, result_buttons(state), disable_preview=True)
             else:
-                # إذا لم يكن هناك رسالة بوت، نرسل جديدة
                 send_message(chat_id, result, result_buttons(state), disable_preview=True)
             log_action(user_id, username, state, result[:100])
+            
     except Exception as e:
+        # ====== إيقاف الأنيميشن في حالة الخطأ ======
+        animation_stop_flags[user_id] = True
+        
         err_msg = f"❌ خطأ: {str(e)}"
         last_bot = user_last_bot_msg.get(user_id)
         if last_bot:
@@ -795,6 +982,7 @@ def process_message(message):
         log_action(user_id, username, state, f"ERROR: {str(e)}")
 
 # ========== التشغيل الرئيسي ==========
+
 def main():
     global last_update_id
     last_update_id = 0
@@ -805,11 +993,11 @@ def main():
     except:
         pass
     print("="*70)
-    print("🔱 OSINT BOT ")
-    print("✅")
-    print("✅")
-    print("✅")
-    print("✅")
+    print("🔱 OSINT BOT - FINAL VERSION")
+    print("✅ جميع الأدوات الأصلية تعمل")
+    print("✅ إضافات جديدة: HTTP Methods, Quick Reports")
+    print("✅ أنيميشن يظهر فقط للفحوصات الطويلة ويتوقف فوراً عند ظهور النتيجة")
+    print("✅ Web موحدة في قائمة واحدة")
     print("="*70)
     while True:
         try:
